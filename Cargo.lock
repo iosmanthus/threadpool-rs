@@ -1,0 +1,4 @@
+[[package]]
+name = "threadpool-rs"
+version = "0.1.0"
+
