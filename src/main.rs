@@ -15,27 +15,40 @@ where
     }
 }
 
-type Job = Box<dyn FnBox + Send + 'static>;
+type Task = Box<dyn FnBox + Send + 'static>;
+
+enum Message {
+    Work(Task),
+    Stop,
+}
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: Sender<Job>,
+    sender: Sender<Message>,
 }
 
 struct Worker {
     id: usize,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Worker {
-    pub fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
-        let thread = thread::spawn(move || {
-            let receiver = receiver.lock().unwrap();
-            for job in receiver.iter() {
-                job.call_box();
+    pub fn new(id: usize, receiver: Arc<Mutex<Receiver<Message>>>) -> Self {
+        let thread = thread::spawn(move || loop {
+            let message = receiver.lock().unwrap().recv().unwrap();
+            match message {
+                Message::Work(task) => {
+                    task.call_box();
+                }
+                Message::Stop => {
+                    break;
+                }
             }
         });
-        Worker { id, thread }
+        Worker {
+            id,
+            thread: Some(thread),
+        }
     }
 }
 
@@ -57,13 +70,29 @@ impl ThreadPool {
         F: FnOnce(),
         F: Send + 'static,
     {
-        self.sender.send(Box::new(f)).unwrap();
+        self.sender.send(Message::Work(Box::new(f))).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for _ in 0..self.workers.len() {
+            self.sender.send(Message::Stop).unwrap();
+        }
+        for worker in self.workers.iter_mut() {
+            worker.thread.take().unwrap().join().unwrap();
+        }
     }
 }
 
 fn main() {
     let pool = ThreadPool::new(4);
-    pool.excute(|| {
-        println!("1");
+    for i in 0..4 {
+        pool.excute(move || loop {
+            println!("{}", i);
+        });
+    }
+    pool.excute(move || loop {
+        println!("{}", "2333333");
     });
 }
